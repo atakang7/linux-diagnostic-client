@@ -38,6 +38,8 @@ These defaults use demo credentials and bind locally. Do not expose the service 
 
 | Method | Path | Description |
 | --- | --- | --- |
+| GET | `/healthz` | Process liveness |
+| GET | `/readyz` | Database readiness |
 | GET | `/api/files?path=/&depth=1` | Discovered files; depth 1–10 |
 | GET | `/api/logs?file=/var/log/app.log` | Up to 100 log entries; optional RFC3339 `before` |
 | POST | `/api/logs/search` | Full-text search with JSON `query`, optional `files`, `start_time`, `end_time` |
