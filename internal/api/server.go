@@ -35,6 +35,21 @@ func NewServer(cfg *config.Config, db *db.DB) *Server {
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", wsHandler.ServeWS)
 
+	// Liveness and database readiness use separate probes.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := db.Ping(ctx); err != nil {
+			log.Printf("database readiness probe failed: %v", err)
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ready\n"))
+	})
+
 	// REST endpoints
 	mux.HandleFunc("/api/files", httpHandler.GetFiles)
 	mux.HandleFunc("/api/logs", httpHandler.GetLogs)
