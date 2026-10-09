@@ -332,6 +332,10 @@ func (h *Handler) flushNetworkBatch(ctx context.Context) error {
 
 	// Save to database
 	if err := h.db.SaveNetworkPackets(ctx, batch); err != nil {
+		// Preserve undelivered data for the next flush attempt.
+		h.batchMutex.Lock()
+		h.networkBatch = append(batch, h.networkBatch...)
+		h.batchMutex.Unlock()
 		return fmt.Errorf("save network batch: %w", err)
 	}
 
@@ -372,8 +376,7 @@ func (h *Handler) Close() {
 		close(h.shutdownCh)
 		_ = h.flushNetworkBatch(context.Background())
 
-		close(h.networkStreamCh)
-		close(h.logStreamCh)
-		close(h.fileUpdateCh)
+		// Producers may still be finishing requests while listeners shut down.
+		// Leave event channels open; the WebSocket fan-out has its own stop signal.
 	})
 }
