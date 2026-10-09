@@ -17,3 +17,27 @@ func TestLoadHonorsEnvironment(t *testing.T) {
 		t.Fatalf("configured bind addresses not applied: %+v", cfg)
 	}
 }
+
+func TestLoadRejectsInvalidEnvironment(t *testing.T) {
+	cases := []struct {
+		key string
+		value string
+	}{
+		{"DATABASE_URL", ""},
+		{"SERVER_ADDR", ""},
+		{"AGENT_ADDR", "no-port"},
+		{"AGENT_ADDR", "127.0.0.1:99999"},
+		{"SERVER_ADDR", "127.0.0.1:0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgres://example")
+			t.Setenv("SERVER_ADDR", "127.0.0.1:8080")
+			t.Setenv("AGENT_ADDR", "127.0.0.1:8081")
+			t.Setenv(tc.key, tc.value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected error for %s=%q", tc.key, tc.value)
+			}
+		})
+	}
+}
