@@ -194,35 +194,44 @@ func (db *DB) SaveNetworkPackets(ctx context.Context, packets []models.NetworkPa
 		return nil
 	}
 
-	valueStrings := make([]string, 0, len(packets))
-	valueArgs := make([]interface{}, 0, len(packets)*9)
-
-	for i, packet := range packets {
-		baseIndex := i * 9
-		valueStrings = append(valueStrings, fmt.Sprintf(
-			"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			baseIndex+1, baseIndex+2, baseIndex+3, baseIndex+4,
-			baseIndex+5, baseIndex+6, baseIndex+7, baseIndex+8, baseIndex+9,
-		))
-		valueArgs = append(valueArgs,
-			packet.Timestamp, packet.Protocol, packet.SrcIP, packet.DstIP,
-			packet.SrcPort, packet.DstPort, packet.Length, packet.PayloadSize, packet.TCPFlags,
-		)
-	}
-
-	query := fmt.Sprintf(`
-		INSERT INTO network_packets (
-			time, protocol, src_ip, dst_ip, src_port,
-			dst_port, length, payload_size, tcp_flags
-		)
-		VALUES %s`,
-		strings.Join(valueStrings, ","))
-
-	_, err := db.pool.Exec(ctx, query, valueArgs...)
+	// PostgreSQL permits at most 65,535 bind parameters per statement.
+	// Keep inserts bounded and use one transaction for all chunks.
+	const maxRowsPerInsert = 1000
+	tx, err := db.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("bulk insert network packets: %w", err)
+		return fmt.Errorf("start network packet transaction: %w", err)
 	}
+	defer tx.Rollback(ctx)
 
+	for start := 0; start < len(packets); start += maxRowsPerInsert {
+		end := start + maxRowsPerInsert
+		if end > len(packets) {
+			end = len(packets)
+		}
+		batch := packets[start:end]
+		values := make([]string, 0, len(batch))
+		args := make([]interface{}, 0, len(batch)*9)
+		for i, p := range batch {
+			n := i * 9
+			values = append(values, fmt.Sprintf(
+				"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				n+1, n+2, n+3, n+4, n+5, n+6, n+7, n+8, n+9,
+			))
+			args = append(args, p.Timestamp, p.Protocol, p.SrcIP, p.DstIP,
+				p.SrcPort, p.DstPort, p.Length, p.PayloadSize, p.TCPFlags)
+		}
+		query := fmt.Sprintf(`
+			INSERT INTO network_packets (
+				time, protocol, src_ip, dst_ip, src_port,
+				dst_port, length, payload_size, tcp_flags
+			) VALUES %s`, strings.Join(values, ","))
+		if _, err := tx.Exec(ctx, query, args...); err != nil {
+			return fmt.Errorf("insert network packets %d-%d: %w", start, end, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit network packets: %w", err)
+	}
 	return nil
 }
 
