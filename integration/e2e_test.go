@@ -94,6 +94,14 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 	}
 	defer ws.Close()
 
+	// Every subscribed client should receive the update, not just whichever
+	// goroutine happened to consume a shared upstream channel.
+	otherWS, _, err := websocket.DefaultDialer.Dial("ws://"+httpAddr+"/ws", headers)
+	if err != nil {
+		t.Fatalf("second websocket handshake: %v", err)
+	}
+	defer otherWS.Close()
+
 	var agent net.Conn
 	eventually(t, "agent listener", func() bool {
 		var err error
@@ -117,21 +125,23 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The WebSocket must deliver the same file update as the REST database.
-	_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
-	for {
-		var event struct {
-			Type string `json:"type"`
+	// The WebSocket must deliver the same file update to both viewers.
+	for _, subscriber := range []*websocket.Conn{ws, otherWS} {
+		_ = subscriber.SetReadDeadline(time.Now().Add(10 * time.Second))
+		for {
+			var event struct {
+				Type string `json:"type"`
 			Payload json.RawMessage `json:"payload"`
 		}
-		if err := ws.ReadJSON(&event); err != nil {
+		if err := subscriber.ReadJSON(&event); err != nil {
 			t.Fatalf("did not observe file_update over WebSocket: %v", err)
 		}
-		if event.Type == "file_update" {
-			if !strings.Contains(string(event.Payload), "diagnostic-e2e.log") {
-				t.Fatalf("unexpected file event: %s", event.Payload)
+			if event.Type == "file_update" {
+				if !strings.Contains(string(event.Payload), "diagnostic-e2e.log") {
+					t.Fatalf("unexpected file event: %s", event.Payload)
+				}
+				break
 			}
-			break
 		}
 	}
 
