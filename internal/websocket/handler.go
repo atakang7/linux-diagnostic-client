@@ -127,6 +127,11 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) readPump(conn *websocket.Conn, cancel context.CancelFunc) {
 	defer cancel()
+	conn.SetReadLimit(1 << 20)
+	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	})
 	for {
 		var msg wsMessage
 		if err := conn.ReadJSON(&msg); err != nil {
@@ -157,10 +162,12 @@ func (h *Handler) writePump(ctx context.Context, conn *websocket.Conn, queue <-c
 		case <-h.done:
 			return
 		case event := <-queue:
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteJSON(event); err != nil {
 				return
 			}
 		case <-ticker.C:
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
