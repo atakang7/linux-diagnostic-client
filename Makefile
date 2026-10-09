@@ -1,31 +1,34 @@
-.PHONY: build run test clean
+GO ?= go
+BUILD_DIR ?= bin
+BINARY_NAME ?= diagnostic-client
 
-# Build settings
-BINARY_NAME=diagnostic-client
-BUILD_DIR=bin
+.PHONY: build run test vet clean init-db dev-db
 
 build:
-	@echo "Building diagnostic client API..."
-	@go build -o $(BUILD_DIR)/$(BINARY_NAME) cmd/api/main.go
+	mkdir -p $(BUILD_DIR)
+	$(GO) build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/api
 
 run:
-	@go run cmd/api/main.go
+	$(GO) run ./cmd/api
 
 test:
-	@go test -v ./...
+	$(GO) test -race -count=1 ./...
+
+vet:
+	$(GO) vet ./...
 
 clean:
-	@rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR)
 
-# Database initialization
+# Requires PostgreSQL with the TimescaleDB extension available.
 init-db:
-	@psql -h localhost -U postgres -f internal/db/schema.sql
+	psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f internal/db/schema.sql
 
-# Docker helpers
-docker-postgres:
-	@docker run -d --name diagnostic-postgres \
-		-e POSTGRES_HOST_AUTH_METHOD=trust \
-		-p 5432:5432 \
-		postgres:latest
-
-.PHONY: init-db docker-postgres
+# Local-only development database; never expose a trust-authenticated instance.
+dev-db:
+	docker run -d --name diagnostic-postgres \
+		-e POSTGRES_USER=postgres \
+		-e POSTGRES_PASSWORD=postgres \
+		-e POSTGRES_DB=postgres \
+		-p 127.0.0.1:5432:5432 \
+		timescale/timescaledb:latest-pg16
