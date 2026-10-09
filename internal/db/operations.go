@@ -350,12 +350,12 @@ func (db *DB) GetFileTree(ctx context.Context, path string, depth int) ([]models
               AND t.level < $2
               AND t.level > 0
         )
-        SELECT DISTINCT 
-            path, parent_path, name, is_directory, 
+        SELECT DISTINCT ON (path)
+            path, parent_path, name, is_directory,
             size, mod_time, is_gzipped, is_scraped
         FROM tree
-        ORDER BY 
-            level,
+        ORDER BY
+            path, level,
             parent_path,
             CASE WHEN is_directory THEN 0 ELSE 1 END,
             name;
