@@ -120,14 +120,33 @@ func (h *Handler) SearchLogs(w http.ResponseWriter, r *http.Request) {
 		EndTime   time.Time `json:"end_time"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		http.Error(w, "query must not be empty", http.StatusBadRequest)
+		return
+	}
+	if req.StartTime.IsZero() {
+		req.StartTime = time.Unix(0, 0).UTC()
+	}
+	if req.EndTime.IsZero() {
+		req.EndTime = time.Now().Add(time.Minute)
+	}
+	if req.EndTime.Before(req.StartTime) {
+		http.Error(w, "end_time must not precede start_time", http.StatusBadRequest)
 		return
 	}
 
 	logs, err := h.db.SearchLogs(r.Context(), req.Query, req.Files, req.StartTime, req.EndTime)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[API] log search failed: %v", err)
+		http.Error(w, "database operation failed", http.StatusInternalServerError)
 		return
 	}
 
