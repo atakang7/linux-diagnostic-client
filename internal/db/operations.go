@@ -437,32 +437,31 @@ func (db *DB) GetNetworkPackets(ctx context.Context, startTime, endTime time.Tim
 
 // GetNetworkPacketsWithStats retrieves network packets with aggregated statistics
 func (db *DB) GetNetworkPacketsWithStats(ctx context.Context, startTime, endTime time.Time, protocols []string) (*models.NetworkStats, error) {
-	statsQuery := `
+	const statsQuery = `
 		WITH filtered_packets AS (
-			SELECT *
-			FROM network_packets
-			WHERE 
-				time BETWEEN $1 AND $2
-				AND ($3::text[] IS NULL OR protocol = ANY($3))
+			SELECT * FROM network_packets
+			WHERE time BETWEEN $1 AND $2
+			  AND ($3::text[] IS NULL OR protocol = ANY($3))
 		)
-		SELECT 
-			COUNT(*) as packet_count,
-			SUM(length) as total_bytes,
-			AVG(length) as avg_packet_size,
-			COUNT(DISTINCT src_ip) as unique_sources,
-			COUNT(DISTINCT dst_ip) as unique_destinations,
-			COUNT(DISTINCT protocol) as protocol_count,
-			COALESCE(jsonb_object_agg(protocol, protocol_count), '{}'::jsonb) as protocol_stats
-		FROM filtered_packets
-		LEFT JOIN (
-			SELECT protocol, COUNT(*) as protocol_count
-			FROM filtered_packets
-			GROUP BY protocol
-		) protocol_summary ON true;`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(length), 0),
+			COALESCE(AVG(length), 0)::double precision,
+			COUNT(DISTINCT src_ip),
+			COUNT(DISTINCT dst_ip),
+			COUNT(DISTINCT protocol),
+			COALESCE((
+				SELECT jsonb_object_agg(protocol, packet_count)
+				FROM (
+					SELECT protocol, COUNT(*) AS packet_count
+					FROM filtered_packets
+					GROUP BY protocol
+				) AS protocol_summary
+			), '{}'::jsonb)
+		FROM filtered_packets`
 
 	var stats models.NetworkStats
 	var protocolStatsJSON []byte
-
 	err := db.pool.QueryRow(ctx, statsQuery, startTime, endTime, protocols).Scan(
 		&stats.PacketCount,
 		&stats.TotalBytes,
@@ -475,18 +474,14 @@ func (db *DB) GetNetworkPacketsWithStats(ctx context.Context, startTime, endTime
 	if err != nil {
 		return nil, fmt.Errorf("query network stats: %w", err)
 	}
-
 	if err := json.Unmarshal(protocolStatsJSON, &stats.ProtocolStats); err != nil {
 		return nil, fmt.Errorf("unmarshal protocol stats: %w", err)
 	}
 
-	// Get the actual packets
-	packets, err := db.GetNetworkPackets(ctx, startTime, endTime, protocols)
+	stats.Packets, err = db.GetNetworkPackets(ctx, startTime, endTime, protocols)
 	if err != nil {
 		return nil, err
 	}
-	stats.Packets = packets
-
 	return &stats, nil
 }
 
