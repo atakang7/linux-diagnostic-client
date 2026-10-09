@@ -10,10 +10,10 @@ import (
 func TestInvalidRequestsNeverReachDatabase(t *testing.T) {
 	handler := NewHandler(nil)
 	tests := []struct {
-		name string
+		name   string
 		method string
 		target string
-		body string
+		body   string
 		handle http.HandlerFunc
 	}{
 		{"invalid file depth", http.MethodGet, "/api/files?depth=0", "", handler.GetFiles},
