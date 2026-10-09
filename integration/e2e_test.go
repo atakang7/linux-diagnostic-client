@@ -76,9 +76,12 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	exited := false
 	defer func() {
-		cancel()
-		_ = cmd.Wait()
+		if !exited {
+			cancel()
+			_ = cmd.Wait()
+		}
 	}()
 
 	baseURL := "http://" + httpAddr
@@ -279,4 +282,20 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 		}
 		return false
 	})
+
+	// Shutdown is part of the E2E contract, not just process cleanup.
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("signal shutdown: %v", err)
+	}
+	exitCh := make(chan error, 1)
+	go func() { exitCh <- cmd.Wait() }()
+	select {
+	case err := <-exitCh:
+		exited = true
+		if err != nil {
+			t.Fatalf("service did not shut down cleanly: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("service did not exit after SIGINT")
+	}
 }
