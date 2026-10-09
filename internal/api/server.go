@@ -100,5 +100,6 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.server.Shutdown(shutdownCtx); err != nil && runErr == nil {
 		runErr = err
 	}
+	s.tunnel.Close() // flush pending network events before the database closes
 	return runErr
 }
