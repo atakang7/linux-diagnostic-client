@@ -186,15 +186,38 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 		return false
 	})
 
+	searchRequest := `{"query":"diagnostic e2e error"}`
+	searchResponse, err := http.Post(baseURL+"/api/logs/search", "application/json", strings.NewReader(searchRequest))
+	if err != nil {
+		t.Fatalf("log search request: %v", err)
+	}
+	defer searchResponse.Body.Close()
+	if searchResponse.StatusCode != http.StatusOK {
+		t.Fatalf("log search status: %s", searchResponse.Status)
+	}
+	var matches []map[string]any
+	if err := json.NewDecoder(searchResponse.Body).Decode(&matches); err != nil {
+		t.Fatalf("decode log search: %v", err)
+	}
+	if len(matches) != 1 || matches[0]["line"] != "diagnostic e2e error detected" {
+		t.Fatalf("unexpected full-text search results: %+v", matches)
+	}
+
 	now := time.Now().UTC()
-	networkPayload := map[string]any{
-		"timestamp": now.Format(time.RFC3339Nano),
-		"packets": []any{map[string]any{
+	// More than one SQL chunk: verifies batch bounds and aggregate accuracy.
+	const packetCount = 1200
+	packetBatch := make([]map[string]any, 0, packetCount)
+	for i := 0; i < packetCount; i++ {
+		packetBatch = append(packetBatch, map[string]any{
 			"timestamp": now.Format(time.RFC3339Nano),
 			"protocol": "TCP", "src_ip": "10.0.0.1", "dst_ip": "10.0.0.2",
 			"src_port": 5123, "dst_port": 443, "length": 64, "payload_size": 10,
 			"tcp_flags": "SYN",
-		}},
+		})
+	}
+	networkPayload := map[string]any{
+		"timestamp": now.Format(time.RFC3339Nano),
+		"packets": packetBatch,
 	}
 	if err := encoder.Encode(map[string]any{
 		"type": "metrics", "payload": networkPayload,
@@ -233,7 +256,7 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 			return false
 		}
 		lastResponse = fmt.Sprintf("packet_count=%d packets=%+v", stats.PacketCount, stats.Packets)
-		if stats.PacketCount < 1 {
+		if stats.PacketCount != packetCount {
 			return false
 		}
 		for _, row := range stats.Packets {
