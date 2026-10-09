@@ -398,9 +398,10 @@ func scanFileNodes(rows pgx.Rows) ([]models.FileNode, error) {
 
 func (db *DB) GetNetworkPackets(ctx context.Context, startTime, endTime time.Time, protocols []string) ([]models.NetworkPacket, error) {
 	query := `
-		SELECT 
-			time, protocol, src_ip, dst_ip, src_port, 
-			dst_port, length, payload_size, tcp_flags
+		SELECT
+			time, protocol, COALESCE(host(src_ip), ''), COALESCE(host(dst_ip), ''),
+			COALESCE(src_port, 0), COALESCE(dst_port, 0),
+			COALESCE(length, 0), COALESCE(payload_size, 0), COALESCE(tcp_flags, '')
 		FROM network_packets
 		WHERE 
 			time BETWEEN $1 AND $2
