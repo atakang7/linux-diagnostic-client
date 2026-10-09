@@ -60,3 +60,8 @@ jobs:
         run: go build -o "$RUNNER_TEMP/diagnostic-client" ./cmd/api
       - name: Test TCP to database, REST and WebSocket
         run: CLIENT_BINARY="$RUNNER_TEMP/diagnostic-client" go test -tags=integration -v -count=1 ./integration
+      - name: Database diagnostics on failure
+        if: failure()
+        run: |
+          psql -h 127.0.0.1 -U postgres -d diagnostic -c "SELECT count(*) FROM network_packets"
+          psql -h 127.0.0.1 -U postgres -d diagnostic -c "SELECT time, protocol, src_ip, dst_ip FROM network_packets ORDER BY time DESC LIMIT 5"
