@@ -12,8 +12,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -22,16 +22,12 @@ jobs:
           files="$(gofmt -l .)"
           if [ -n "$files" ]; then
             printf 'Unformatted Go files:\\n%s\\n' "$files"
-            for file in $files; do
-              echo "FORMATTED_BEGIN:$file"
-              gofmt "$file" | base64 -w 0
-              echo
-              echo "FORMATTED_END:$file"
-            done
             exit 1
           fi
       - name: Verify dependency checksums
         run: go mod verify
+      - name: Verify schema copies remain identical
+        run: cmp internal/db/schema.sql init-scripts/init.sql
       - name: Build
         run: go build ./...
       - name: Vet
@@ -60,8 +56,8 @@ jobs:
       PGPASSWORD: postgres
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
