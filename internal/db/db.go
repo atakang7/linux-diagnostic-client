@@ -31,10 +31,15 @@ func New(ctx context.Context, url string) (*DB, error) {
 	}
 
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}
 
 	return &DB{pool: pool}, nil
+}
+
+func (db *DB) Ping(ctx context.Context) error {
+	return db.pool.Ping(ctx)
 }
 
 func (db *DB) Close() {

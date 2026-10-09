@@ -17,30 +17,86 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // In production, configure this properly
-	},
 }
 
-type Handler struct {
-	cfg    *config.Config
-	tunnel *tunnel.Handler
-	// Map to track which file each client is viewing
-	viewers map[*websocket.Conn]string
-	mu      sync.RWMutex
-}
-
-func NewHandler(cfg *config.Config, tunnel *tunnel.Handler) *Handler {
-	return &Handler{
-		cfg:     cfg,
-		tunnel:  tunnel,
-		viewers: make(map[*websocket.Conn]string),
-	}
-}
+const (
+	clientQueueSize = 128
+	pingInterval    = 30 * time.Second
+)
 
 type wsMessage struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
+}
+
+// Handler consumes each upstream stream once and fans out events to connected viewers.
+type Handler struct {
+	cfg     *config.Config
+	tunnel  *tunnel.Handler
+	mu      sync.RWMutex
+	viewers map[*websocket.Conn]string
+	clients map[*websocket.Conn]chan wsMessage
+	done    chan struct{}
+	once    sync.Once
+}
+
+func NewHandler(cfg *config.Config, stream *tunnel.Handler) *Handler {
+	h := &Handler{
+		cfg:     cfg,
+		tunnel:  stream,
+		viewers: make(map[*websocket.Conn]string),
+		clients: make(map[*websocket.Conn]chan wsMessage),
+		done:    make(chan struct{}),
+	}
+	go h.forwardEvents()
+	return h
+}
+
+func (h *Handler) forwardEvents() {
+	for {
+		select {
+		case <-h.done:
+			return
+		case packets, ok := <-h.tunnel.NetworkStream():
+			if !ok {
+				return
+			}
+			h.broadcast("network", packets, "")
+		case entry, ok := <-h.tunnel.LogStream():
+			if !ok {
+				return
+			}
+			h.broadcast("log", entry, entry.Filename)
+		case file, ok := <-h.tunnel.FileUpdates():
+			if !ok {
+				return
+			}
+			h.broadcast("file_update", file, "")
+		}
+	}
+}
+
+func (h *Handler) broadcast(kind string, payload any, filterPath string) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("WebSocket marshal %s: %v", kind, err)
+		return
+	}
+	message := wsMessage{Type: kind, Payload: data}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for conn, queue := range h.clients {
+		if filterPath != "" && h.viewers[conn] != filterPath {
+			continue
+		}
+		select {
+		case queue <- message:
+		default:
+			// A slow subscriber must not block delivery to other viewers.
+			log.Printf("WebSocket subscriber queue full; dropping %s event", kind)
+		}
+	}
 }
 
 func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -49,102 +105,69 @@ func (h *Handler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade failed: %v", err)
 		return
 	}
-
-	// Start handler goroutines
 	ctx, cancel := context.WithCancel(r.Context())
+	queue := make(chan wsMessage, clientQueueSize)
+
+	h.mu.Lock()
+	h.clients[conn] = queue
+	h.mu.Unlock()
+
 	defer func() {
 		cancel()
 		h.mu.Lock()
+		delete(h.clients, conn)
 		delete(h.viewers, conn)
 		h.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
-	// Handle client messages
-	go h.readPump(ctx, conn)
-
-	// Handle data streams
-	h.writePump(ctx, conn)
+	go h.readPump(conn, cancel)
+	h.writePump(ctx, conn, queue)
 }
 
-func (h *Handler) readPump(ctx context.Context, conn *websocket.Conn) {
+func (h *Handler) readPump(conn *websocket.Conn, cancel context.CancelFunc) {
+	defer cancel()
+	conn.SetReadLimit(1 << 20)
+	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+	})
 	for {
 		var msg wsMessage
-		err := conn.ReadJSON(&msg)
-		if err != nil {
+		if err := conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("WebSocket read error: %v", err)
 			}
 			return
 		}
-
-		switch msg.Type {
-		case "view_file":
+		if msg.Type == "view_file" {
 			var filePath string
-			if err := json.Unmarshal(msg.Payload, &filePath); err != nil {
+			if json.Unmarshal(msg.Payload, &filePath) != nil {
 				continue
 			}
 			h.mu.Lock()
 			h.viewers[conn] = filePath
 			h.mu.Unlock()
-
-		case "speed_control":
-			var speed float64
-			if err := json.Unmarshal(msg.Payload, &speed); err != nil {
-				continue
-			}
-			// Store speed preference for this connection
-			// Implementation depends on your rate limiting strategy
 		}
 	}
 }
 
-func (h *Handler) writePump(ctx context.Context, conn *websocket.Conn) {
-	// Create ticker for network updates
-	ticker := time.NewTicker(100 * time.Millisecond)
+func (h *Handler) writePump(ctx context.Context, conn *websocket.Conn, queue <-chan wsMessage) {
+	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
-
-		case packets := <-h.tunnel.NetworkStream():
-			err := conn.WriteJSON(wsMessage{
-				Type:    "network",
-				Payload: json.RawMessage(mustMarshal(packets)),
-			})
-			if err != nil {
+		case <-h.done:
+			return
+		case event := <-queue:
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := conn.WriteJSON(event); err != nil {
 				return
 			}
-
-		case log := <-h.tunnel.LogStream():
-			// Check if client is viewing this file
-			h.mu.RLock()
-			viewingFile := h.viewers[conn]
-			h.mu.RUnlock()
-
-			if viewingFile == log.Filename {
-				err := conn.WriteJSON(wsMessage{
-					Type:    "log",
-					Payload: json.RawMessage(mustMarshal(log)),
-				})
-				if err != nil {
-					return
-				}
-			}
-
-		case file := <-h.tunnel.FileUpdates():
-			err := conn.WriteJSON(wsMessage{
-				Type:    "file_update",
-				Payload: json.RawMessage(mustMarshal(file)),
-			})
-			if err != nil {
-				return
-			}
-
 		case <-ticker.C:
-			// Send ping to keep connection alive
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
@@ -152,12 +175,6 @@ func (h *Handler) writePump(ctx context.Context, conn *websocket.Conn) {
 	}
 }
 
-// Helper function to handle JSON marshaling
-func mustMarshal(v interface{}) []byte {
-	data, err := json.Marshal(v)
-	if err != nil {
-		log.Printf("Error marshaling JSON: %v", err)
-		return []byte("{}")
-	}
-	return data
+func (h *Handler) Close() {
+	h.once.Do(func() { close(h.done) })
 }

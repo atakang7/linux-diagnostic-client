@@ -1,0 +1,78 @@
+name: Go
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go formatting
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            printf 'Unformatted Go files:\\n%s\\n' "$files"
+            exit 1
+          fi
+      - name: Verify dependency checksums
+        run: go mod verify
+      - name: Verify schema copies remain identical
+        run: cmp internal/db/schema.sql init-scripts/init.sql
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: verify
+    services:
+      database:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGPASSWORD: postgres
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+      - name: Initialize TimescaleDB schema
+        run: psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 -f internal/db/schema.sql
+      - name: Build service
+        run: go build -o "$RUNNER_TEMP/diagnostic-client" ./cmd/api
+      - name: Test TCP to database, REST and WebSocket
+        run: CLIENT_BINARY="$RUNNER_TEMP/diagnostic-client" go test -tags=integration -v -count=1 ./integration
+      - name: Database diagnostics on failure
+        if: failure()
+        run: |
+          psql -h 127.0.0.1 -U postgres -d diagnostic -c "SELECT count(*) FROM network_packets"
+          psql -h 127.0.0.1 -U postgres -d diagnostic -c "SELECT time, protocol, src_ip, dst_ip FROM network_packets ORDER BY time DESC LIMIT 5"

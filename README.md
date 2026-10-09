@@ -1,236 +1,78 @@
-# Diagnostic Client API Documentation
+# Linux Diagnostic Client
 
-## Overview
+Go service for receiving telemetry from the [Linux Diagnostic Agent](https://github.com/AtakanG7/linux-diagnostic-agent). It stores log and network data in PostgreSQL/TimescaleDB and exposes a REST API and live WebSocket stream.
 
-The **Diagnostic Client API** enables real-time monitoring and analysis of system diagnostics, including file system monitoring, network traffic analysis, and log aggregation. This API provides REST endpoints and a WebSocket connection for live updates.
+## Architecture
 
-### Base URL
-```
-http://localhost:8080
-```
-
----
-
-## WebSocket Endpoint
-
-### Real-time Updates Connection
-
-```
-GET /ws
+```text
+Linux Diagnostic Agent
+         | TCP :8081 (newline-delimited JSON)
+         v
+   Tunnel handler -----> PostgreSQL/TimescaleDB -----> REST :8080
+         |
+         +-------------> WebSocket fan-out :8080/ws
 ```
 
-After connecting, the WebSocket streams updates in various formats:
+## Run locally
 
-#### File Update Message
+Requires Go 1.21+, Docker, and the PostgreSQL CLI (`psql`).
+
+```sh
+make dev-db        # localhost-only TimescaleDB container
+make init-db       # create database and schema
+make build
+./bin/diagnostic-client
+```
+
+The database container is optional when a TimescaleDB-enabled PostgreSQL instance is already available. `make test` runs race-enabled unit tests; CI also launches a real database and executes integration tests.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | `postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable` | Database connection |
+| `SERVER_ADDR` | `127.0.0.1:8080` | HTTP and WebSocket listener |
+| `AGENT_ADDR` | `127.0.0.1:8081` | Agent TCP listener |
+
+These defaults use demo credentials and bind locally. Do not expose the service to untrusted networks.
+
+## HTTP and WebSocket
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/healthz` | Process liveness |
+| GET | `/readyz` | Database readiness |
+| GET | `/api/files?path=/&depth=1` | Discovered files; depth 1–10 |
+| GET | `/api/logs?file=/var/log/app.log` | Up to 100 log entries; optional RFC3339 `before` |
+| POST | `/api/logs/search` | Full-text search with JSON `query`, optional `files`, `start_time`, `end_time` |
+| GET | `/api/network/metrics` | Aggregated statistics and latest 1,000 matching packets; optional `start`, `end`, `protocol` |
+| GET | `/ws` | Live network, file, and selected log events |
+
+```sh
+curl -sS http://127.0.0.1:8080/api/files
+curl -sS -H 'Content-Type: application/json' -d '{"query":"connection refused"}' \
+  http://127.0.0.1:8080/api/logs/search
+```
+
+WebSocket messages have `type` and `payload`. Event types are `network`, `file_update`, and `log`. To receive events for a particular log file, send:
+
 ```json
-{
-  "type": "file_update",
-  "payload": {
-    "path": "/path/to/file",
-    "parent_path": "/path/to",
-    "name": "file",
-    "is_directory": false,
-    "size": 1024,
-    "mod_time": "2024-11-02T03:18:43Z",
-    "is_gzipped": false,
-    "is_scraped": false
-  }
-}
+{"type":"view_file","payload":"/var/log/app.log"}
 ```
 
-#### Network Update Message
-```json
-{
-  "type": "network",
-  "payload": [
-    {
-      "timestamp": "2024-11-02T03:18:43Z",
-      "protocol": "TCP",
-      "src_ip": "192.168.1.1",
-      "dst_ip": "192.168.1.2",
-      "src_port": 8080,
-      "dst_port": 443,
-      "length": 1024,
-      "payload_size": 512,
-      "tcp_flags": "ACK"
-    }
-  ]
-}
+Validation errors return HTTP 400; unexpected database failures return HTTP 500 without exposing internal details.
+
+## Verification
+
+```sh
+make build
+make vet
+make test
 ```
 
-#### Log Update Message
-```json
-{
-  "type": "log",
-  "payload": {
-    "filename": "/var/log/system.log",
-    "line": "Error: Connection refused",
-    "line_num": 1234,
-    "timestamp": "2024-11-02T03:18:43Z",
-    "level": "ERROR"
-  }
-}
-```
+The CI integration job creates a real TimescaleDB instance, compiles and launches the client, and verifies TCP ingestion, database persistence, REST reads and two simultaneous WebSocket subscribers.
 
----
+## Operational boundaries
 
-## REST API Endpoints
-
-### File System Operations
-
-#### Get File Tree
-```
-GET /api/files
-```
-Retrieves a hierarchical view of the file system.
-
-**Query Parameters:**
-- `path` (string, optional) - Root path to start traversal. Default: `/`
-- `depth` (integer, optional) - Depth of tree traversal. Default: 1, Max: 10
-
-**Success Response (200 OK):**
-```json
-[
-  {
-    "path": "/path/to/file",
-    "parent_path": "/path/to",
-    "name": "file",
-    "is_directory": false,
-    "size": 1024,
-    "mod_time": "2024-11-02T03:18:43Z",
-    "is_gzipped": false,
-    "is_scraped": false
-  }
-]
-```
-
----
-
-### Log Operations
-
-#### Get Logs
-```
-GET /api/logs
-```
-Retrieves log entries for a specific file with pagination.
-
-**Query Parameters:**
-- `file` (string, required) - Path to the log file
-- `before` (string, optional) - ISO timestamp for pagination
-- `limit` (integer, optional) - Max entries to return. Default: 100, Max: 1000
-
-**Success Response (200 OK):**
-```json
-[
-  {
-    "filename": "/var/log/system.log",
-    "line": "Error: Connection refused",
-    "line_num": 1234,
-    "timestamp": "2024-11-02T03:18:43Z",
-    "level": "ERROR"
-  }
-]
-```
-
-#### Search Logs
-```
-POST /api/logs/search
-```
-Searches log entries across multiple files with full-text search capabilities.
-
-**Request Body:**
-```json
-{
-  "query": "error connection",
-  "files": ["/var/log/system.log", "/var/log/app.log"],
-  "start_time": "2024-11-01T00:00:00Z",
-  "end_time": "2024-11-02T00:00:00Z"
-}
-```
-
-**Success Response (200 OK):**
-```json
-[
-  {
-    "filename": "/var/log/system.log",
-    "line": "Error: Connection refused",
-    "line_num": 1234,
-    "timestamp": "2024-11-02T03:18:43Z",
-    "level": "ERROR"
-  }
-]
-```
-
----
-
-### Network Operations
-
-#### Get Network Metrics
-```
-GET /api/network/metrics
-```
-Retrieves network traffic metrics and packet information.
-
-**Query Parameters:**
-- `start` (string, optional) - Start time for metrics
-- `end` (string, optional) - End time for metrics
-- `protocol` (string[], optional) - Filter by protocols (e.g., TCP, UDP)
-
-**Success Response (200 OK):**
-```json
-{
-  "packet_count": 1000,
-  "total_bytes": 1048576,
-  "avg_packet_size": 1024,
-  "unique_sources": 10,
-  "unique_destinations": 20,
-  "protocol_count": 3,
-  "protocol_stats": {
-    "TCP": 800,
-    "UDP": 150,
-    "ICMP": 50
-  },
-  "packets": [
-    {
-      "timestamp": "2024-11-02T03:18:43Z",
-      "protocol": "TCP",
-      "src_ip": "192.168.1.1",
-      "dst_ip": "192.168.1.2",
-      "src_port": 8080,
-      "dst_port": 443,
-      "length": 1024,
-      "payload_size": 512,
-      "tcp_flags": "ACK"
-    }
-  ]
-}
-```
-
----
-
-## Error Responses
-
-All endpoints use standard HTTP status codes and return errors in the following format:
-```json
-{
-  "error": "Detailed error message",
-  "code": "ERROR_CODE",
-  "details": {
-    "field": "Additional error context"
-  }
-}
-```
-
-### Common Status Codes:
-- `200`: Successful operation
-- `400`: Bad request (invalid parameters)
-- `404`: Resource not found
-- `500`: Internal server error
-
-### Common Error Codes:
-- `INVALID_PATH`: Invalid file path provided
-- `FILE_NOT_FOUND`: Requested file does not exist
-- `INVALID_TIME_RANGE`: Invalid time range specified
-- `INVALID_PROTOCOL`: Unsupported protocol specified
-- `SEARCH_ERROR`: Error during log search
-- `DATABASE_ERROR`: Database operation failed
+- This project has **no built-in authentication or TLS** for REST, WebSocket, or agent TCP. Keep it on loopback or inside an appropriately protected network.
+- WebSocket subscribers have bounded queues; slow consumers can miss updates.
+- File inventory is global, not partitioned by agent identity. Avoid running independent overlapping agents.
+- Plain PostgreSQL is insufficient: the schema uses TimescaleDB.

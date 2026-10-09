@@ -40,6 +40,9 @@ func (db *DB) GetAllFiles(ctx context.Context) ([]models.FileNode, error) {
 		files = append(files, f)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate files: %w", err)
+	}
 	return files, nil
 }
 
@@ -194,35 +197,44 @@ func (db *DB) SaveNetworkPackets(ctx context.Context, packets []models.NetworkPa
 		return nil
 	}
 
-	valueStrings := make([]string, 0, len(packets))
-	valueArgs := make([]interface{}, 0, len(packets)*9)
-
-	for i, packet := range packets {
-		baseIndex := i * 9
-		valueStrings = append(valueStrings, fmt.Sprintf(
-			"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			baseIndex+1, baseIndex+2, baseIndex+3, baseIndex+4,
-			baseIndex+5, baseIndex+6, baseIndex+7, baseIndex+8, baseIndex+9,
-		))
-		valueArgs = append(valueArgs,
-			packet.Timestamp, packet.Protocol, packet.SrcIP, packet.DstIP,
-			packet.SrcPort, packet.DstPort, packet.Length, packet.PayloadSize, packet.TCPFlags,
-		)
-	}
-
-	query := fmt.Sprintf(`
-		INSERT INTO network_packets (
-			time, protocol, src_ip, dst_ip, src_port,
-			dst_port, length, payload_size, tcp_flags
-		)
-		VALUES %s`,
-		strings.Join(valueStrings, ","))
-
-	_, err := db.pool.Exec(ctx, query, valueArgs...)
+	// PostgreSQL permits at most 65,535 bind parameters per statement.
+	// Keep inserts bounded and use one transaction for all chunks.
+	const maxRowsPerInsert = 1000
+	tx, err := db.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("bulk insert network packets: %w", err)
+		return fmt.Errorf("start network packet transaction: %w", err)
 	}
+	defer tx.Rollback(ctx)
 
+	for start := 0; start < len(packets); start += maxRowsPerInsert {
+		end := start + maxRowsPerInsert
+		if end > len(packets) {
+			end = len(packets)
+		}
+		batch := packets[start:end]
+		values := make([]string, 0, len(batch))
+		args := make([]interface{}, 0, len(batch)*9)
+		for i, p := range batch {
+			n := i * 9
+			values = append(values, fmt.Sprintf(
+				"($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+				n+1, n+2, n+3, n+4, n+5, n+6, n+7, n+8, n+9,
+			))
+			args = append(args, p.Timestamp, p.Protocol, p.SrcIP, p.DstIP,
+				p.SrcPort, p.DstPort, p.Length, p.PayloadSize, p.TCPFlags)
+		}
+		query := fmt.Sprintf(`
+			INSERT INTO network_packets (
+				time, protocol, src_ip, dst_ip, src_port,
+				dst_port, length, payload_size, tcp_flags
+			) VALUES %s`, strings.Join(values, ","))
+		if _, err := tx.Exec(ctx, query, args...); err != nil {
+			return fmt.Errorf("insert network packets %d-%d: %w", start, end, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit network packets: %w", err)
+	}
 	return nil
 }
 
@@ -251,6 +263,9 @@ func (db *DB) GetLogs(ctx context.Context, filePath string, beforeTime time.Time
 		logs = append(logs, l)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate logs: %w", err)
+	}
 	return logs, nil
 }
 
@@ -282,6 +297,9 @@ func (db *DB) SearchLogs(ctx context.Context, query string, files []string, star
 		logs = append(logs, l)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate logs: %w", err)
+	}
 	return logs, nil
 }
 
@@ -350,12 +368,12 @@ func (db *DB) GetFileTree(ctx context.Context, path string, depth int) ([]models
               AND t.level < $2
               AND t.level > 0
         )
-        SELECT DISTINCT 
-            path, parent_path, name, is_directory, 
+        SELECT DISTINCT ON (path)
+            path, parent_path, name, is_directory,
             size, mod_time, is_gzipped, is_scraped
         FROM tree
-        ORDER BY 
-            level,
+        ORDER BY
+            path, level,
             parent_path,
             CASE WHEN is_directory THEN 0 ELSE 1 END,
             name;
@@ -398,9 +416,10 @@ func scanFileNodes(rows pgx.Rows) ([]models.FileNode, error) {
 
 func (db *DB) GetNetworkPackets(ctx context.Context, startTime, endTime time.Time, protocols []string) ([]models.NetworkPacket, error) {
 	query := `
-		SELECT 
-			time, protocol, src_ip, dst_ip, src_port, 
-			dst_port, length, payload_size, tcp_flags
+		SELECT
+			time, protocol, COALESCE(host(src_ip), ''), COALESCE(host(dst_ip), ''),
+			COALESCE(src_port, 0), COALESCE(dst_port, 0),
+			COALESCE(length, 0), COALESCE(payload_size, 0), COALESCE(tcp_flags, '')
 		FROM network_packets
 		WHERE 
 			time BETWEEN $1 AND $2
@@ -437,32 +456,31 @@ func (db *DB) GetNetworkPackets(ctx context.Context, startTime, endTime time.Tim
 
 // GetNetworkPacketsWithStats retrieves network packets with aggregated statistics
 func (db *DB) GetNetworkPacketsWithStats(ctx context.Context, startTime, endTime time.Time, protocols []string) (*models.NetworkStats, error) {
-	statsQuery := `
+	const statsQuery = `
 		WITH filtered_packets AS (
-			SELECT *
-			FROM network_packets
-			WHERE 
-				time BETWEEN $1 AND $2
-				AND ($3::text[] IS NULL OR protocol = ANY($3))
+			SELECT * FROM network_packets
+			WHERE time BETWEEN $1 AND $2
+			  AND ($3::text[] IS NULL OR protocol = ANY($3))
 		)
-		SELECT 
-			COUNT(*) as packet_count,
-			SUM(length) as total_bytes,
-			AVG(length) as avg_packet_size,
-			COUNT(DISTINCT src_ip) as unique_sources,
-			COUNT(DISTINCT dst_ip) as unique_destinations,
-			COUNT(DISTINCT protocol) as protocol_count,
-			COALESCE(jsonb_object_agg(protocol, protocol_count), '{}'::jsonb) as protocol_stats
-		FROM filtered_packets
-		LEFT JOIN (
-			SELECT protocol, COUNT(*) as protocol_count
-			FROM filtered_packets
-			GROUP BY protocol
-		) protocol_summary ON true;`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(length), 0),
+			COALESCE(AVG(length), 0)::double precision,
+			COUNT(DISTINCT src_ip),
+			COUNT(DISTINCT dst_ip),
+			COUNT(DISTINCT protocol),
+			COALESCE((
+				SELECT jsonb_object_agg(protocol, packet_count)
+				FROM (
+					SELECT protocol, COUNT(*) AS packet_count
+					FROM filtered_packets
+					GROUP BY protocol
+				) AS protocol_summary
+			), '{}'::jsonb)
+		FROM filtered_packets`
 
 	var stats models.NetworkStats
 	var protocolStatsJSON []byte
-
 	err := db.pool.QueryRow(ctx, statsQuery, startTime, endTime, protocols).Scan(
 		&stats.PacketCount,
 		&stats.TotalBytes,
@@ -475,18 +493,14 @@ func (db *DB) GetNetworkPacketsWithStats(ctx context.Context, startTime, endTime
 	if err != nil {
 		return nil, fmt.Errorf("query network stats: %w", err)
 	}
-
 	if err := json.Unmarshal(protocolStatsJSON, &stats.ProtocolStats); err != nil {
 		return nil, fmt.Errorf("unmarshal protocol stats: %w", err)
 	}
 
-	// Get the actual packets
-	packets, err := db.GetNetworkPackets(ctx, startTime, endTime, protocols)
+	stats.Packets, err = db.GetNetworkPackets(ctx, startTime, endTime, protocols)
 	if err != nil {
 		return nil, err
 	}
-	stats.Packets = packets
-
 	return &stats, nil
 }
 
