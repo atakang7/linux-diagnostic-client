@@ -1,0 +1,18 @@
+# Local build outputs
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Developer-only configuration
+.env
+.env.*
+!.env.example
+
+# Local databases and editor state
+*.db
+*.sqlite
+.DS_Store
+.idea/
+.vscode/
