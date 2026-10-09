@@ -38,6 +38,10 @@ func New(ctx context.Context, url string) (*DB, error) {
 	return &DB{pool: pool}, nil
 }
 
+func (db *DB) Ping(ctx context.Context) error {
+	return db.pool.Ping(ctx)
+}
+
 func (db *DB) Close() {
 	if db.pool != nil {
 		db.pool.Close()
