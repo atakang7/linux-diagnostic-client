@@ -17,6 +17,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Go formatting
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            printf 'Unformatted Go files:\\n%s\\n' "$files"
+            exit 1
+          fi
+      - name: Verify dependency checksums
+        run: go mod verify
       - name: Build
         run: go build ./...
       - name: Vet
