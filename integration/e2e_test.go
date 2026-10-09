@@ -113,9 +113,9 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 	encoder := json.NewEncoder(agent)
 	modified := time.Now().UTC().Format(time.RFC3339Nano)
 	file := map[string]any{
-		"path": "/var/log/diagnostic-e2e.log",
-		"parent_path": "/var/log",
-		"name": "diagnostic-e2e.log",
+		"path":         "/var/log/diagnostic-e2e.log",
+		"parent_path":  "/var/log",
+		"name":         "diagnostic-e2e.log",
 		"is_directory": false, "size": 123,
 		"mod_time": modified, "is_gzipped": false, "is_scraped": false,
 	}
@@ -130,12 +130,12 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 		_ = subscriber.SetReadDeadline(time.Now().Add(10 * time.Second))
 		for {
 			var event struct {
-				Type string `json:"type"`
-			Payload json.RawMessage `json:"payload"`
-		}
-		if err := subscriber.ReadJSON(&event); err != nil {
-			t.Fatalf("did not observe file_update over WebSocket: %v", err)
-		}
+				Type    string          `json:"type"`
+				Payload json.RawMessage `json:"payload"`
+			}
+			if err := subscriber.ReadJSON(&event); err != nil {
+				t.Fatalf("did not observe file_update over WebSocket: %v", err)
+			}
 			if event.Type == "file_update" {
 				if !strings.Contains(string(event.Payload), "diagnostic-e2e.log") {
 					t.Fatalf("unexpected file event: %s", event.Payload)
@@ -161,11 +161,11 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 
 	occurrence := time.Now().UTC().Format(time.RFC3339Nano)
 	entry := map[string]any{
-		"filename": "/var/log/diagnostic-e2e.log",
-		"line": "diagnostic e2e error detected",
-		"line_num": 1,
+		"filename":  "/var/log/diagnostic-e2e.log",
+		"line":      "diagnostic e2e error detected",
+		"line_num":  1,
 		"timestamp": occurrence,
-		"level": "error",
+		"level":     "error",
 	}
 	if err := encoder.Encode(map[string]any{
 		"type": "log_data", "payload": []any{entry},
@@ -210,14 +210,14 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 	for i := 0; i < packetCount; i++ {
 		packetBatch = append(packetBatch, map[string]any{
 			"timestamp": now.Format(time.RFC3339Nano),
-			"protocol": "TCP", "src_ip": "10.0.0.1", "dst_ip": "10.0.0.2",
+			"protocol":  "TCP", "src_ip": "10.0.0.1", "dst_ip": "10.0.0.2",
 			"src_port": 5123, "dst_port": 443, "length": 64, "payload_size": 10,
 			"tcp_flags": "SYN",
 		})
 	}
 	networkPayload := map[string]any{
 		"timestamp": now.Format(time.RFC3339Nano),
-		"packets": packetBatch,
+		"packets":   packetBatch,
 	}
 	if err := encoder.Encode(map[string]any{
 		"type": "metrics", "payload": networkPayload,
@@ -242,8 +242,8 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 		defer response.Body.Close()
 		var stats struct {
 			PacketCount int64 `json:"packet_count"`
-			Packets []struct {
-				SrcIP string `json:"src_ip"`
+			Packets     []struct {
+				SrcIP    string `json:"src_ip"`
 				Protocol string `json:"protocol"`
 			} `json:"packets"`
 		}
