@@ -20,7 +20,7 @@ func TestLoadHonorsEnvironment(t *testing.T) {
 
 func TestLoadRejectsInvalidEnvironment(t *testing.T) {
 	cases := []struct {
-		key string
+		key   string
 		value string
 	}{
 		{"DATABASE_URL", ""},
