@@ -40,6 +40,9 @@ func (db *DB) GetAllFiles(ctx context.Context) ([]models.FileNode, error) {
 		files = append(files, f)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate files: %w", err)
+	}
 	return files, nil
 }
 
@@ -260,6 +263,9 @@ func (db *DB) GetLogs(ctx context.Context, filePath string, beforeTime time.Time
 		logs = append(logs, l)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate logs: %w", err)
+	}
 	return logs, nil
 }
 
@@ -291,6 +297,9 @@ func (db *DB) SearchLogs(ctx context.Context, query string, files []string, star
 		logs = append(logs, l)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate logs: %w", err)
+	}
 	return logs, nil
 }
 
