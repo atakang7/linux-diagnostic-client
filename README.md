@@ -1,4 +1,20 @@
-# Diagnostic Client API Documentation
+# Linux Diagnostic Client
+
+Go API and WebSocket service for the [Linux Diagnostic Agent](https://github.com/AtakanG7/linux-diagnostic-agent).
+
+## Local setup
+
+Requires Go 1.21+, PostgreSQL with TimescaleDB, and the database schema in `internal/db/schema.sql`.
+
+```bash
+# Run the SQL against a PostgreSQL instance with TimescaleDB installed.
+psql -h localhost -U postgres -d postgres -f internal/db/schema.sql
+DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable' go run ./cmd/api
+```
+
+The REST API binds to `127.0.0.1:8080` and the agent TCP listener to `127.0.0.1:8081` by default. Set `SERVER_ADDR` and `AGENT_ADDR` to change the bind addresses. Use a protected database credential in `DATABASE_URL` outside local development. The service does not implement authentication; do not expose it directly to untrusted networks.
+
+## API reference
 
 ## Overview
 
