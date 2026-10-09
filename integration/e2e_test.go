@@ -204,13 +204,40 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 	start := url.QueryEscape(now.Add(-time.Minute).Format(time.RFC3339))
 	end := url.QueryEscape(now.Add(time.Minute).Format(time.RFC3339))
 	metricsURL := fmt.Sprintf("%s/api/network/metrics?start=%s&end=%s&protocol=TCP", baseURL, start, end)
+	lastResponse := ""
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("last network response: %s", lastResponse)
+		}
+	})
 	eventually(t, "persisted network packet", func() bool {
-		var rows []map[string]any
-		if !readJSONArray(t, metricsURL, &rows) {
+		response, err := http.Get(metricsURL)
+		if err != nil {
+			lastResponse = err.Error()
 			return false
 		}
-		for _, row := range rows {
-			if row["src_ip"] == "10.0.0.1" && row["protocol"] == "TCP" {
+		defer response.Body.Close()
+		var stats struct {
+			PacketCount int64 `json:"packet_count"`
+			Packets []struct {
+				SrcIP string `json:"src_ip"`
+				Protocol string `json:"protocol"`
+			} `json:"packets"`
+		}
+		if response.StatusCode != http.StatusOK {
+			lastResponse = fmt.Sprintf("HTTP %d", response.StatusCode)
+			return false
+		}
+		if err := json.NewDecoder(response.Body).Decode(&stats); err != nil {
+			lastResponse = "invalid JSON: " + err.Error()
+			return false
+		}
+		lastResponse = fmt.Sprintf("packet_count=%d packets=%+v", stats.PacketCount, stats.Packets)
+		if stats.PacketCount < 1 {
+			return false
+		}
+		for _, row := range stats.Packets {
+			if row.SrcIP == "10.0.0.1" && row.Protocol == "TCP" {
 				return true
 			}
 		}
