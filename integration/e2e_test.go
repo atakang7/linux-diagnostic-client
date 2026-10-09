@@ -82,6 +82,19 @@ func TestTCPIngestionRESTAndWebSocket(t *testing.T) {
 	}()
 
 	baseURL := "http://" + httpAddr
+	eventually(t, "liveness and database readiness", func() bool {
+		for _, path := range []string{"/healthz", "/readyz"} {
+			res, err := http.Get(baseURL + path)
+			if err != nil {
+				return false
+			}
+			_ = res.Body.Close()
+			if res.StatusCode != http.StatusOK {
+				return false
+			}
+		}
+		return true
+	})
 	eventually(t, "HTTP startup", func() bool {
 		var files []json.RawMessage
 		return readJSONArray(t, baseURL+"/api/files", &files)
