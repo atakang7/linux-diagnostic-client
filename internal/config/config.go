@@ -20,9 +20,9 @@ type Config struct {
 
 func Load() (*Config, error) {
 	return &Config{
-		DatabaseURL:       "postgres://postgres:postgres@localhost:5432/diagnostic?sslmode=disable",
-		ServerAddr:        getEnv("SERVER_ADDR", ":8080"),
-		AgentAddr:         getEnv("AGENT_ADDR", ":8081"),
+		DatabaseURL:       getEnv("DATABASE_URL", "postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable"),
+		ServerAddr:        getEnv("SERVER_ADDR", "127.0.0.1:8080"),
+		AgentAddr:         getEnv("AGENT_ADDR", "127.0.0.1:8081"),
 		LogBufferSize:     10000, // Larger buffer for logs
 		NetworkBufferSize: 50000, // Larger buffer for network packets
 		BatchSize:         10000, // Database batch size
