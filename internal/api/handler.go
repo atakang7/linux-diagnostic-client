@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -46,9 +45,12 @@ func (h *Handler) GetFiles(w http.ResponseWriter, r *http.Request) {
 	// Get depth from query params, default to 1 if not specified
 	depth := 1
 	if depthStr := r.URL.Query().Get("depth"); depthStr != "" {
-		if d, err := strconv.Atoi(depthStr); err == nil {
-			depth = d
+		d, err := strconv.Atoi(depthStr)
+		if err != nil || d <= 0 {
+			http.Error(w, "depth must be a positive integer", http.StatusBadRequest)
+			return
 		}
+		depth = d
 	}
 
 	// Limit maximum depth to prevent excessive recursion
@@ -61,7 +63,7 @@ func (h *Handler) GetFiles(w http.ResponseWriter, r *http.Request) {
 	files, err := h.db.GetFileTree(r.Context(), path, depth)
 	if err != nil {
 		log.Printf("[API] Error getting file tree: %v", err)
-		http.Error(w, fmt.Sprintf("Error getting file tree: %v", err), http.StatusInternalServerError)
+		http.Error(w, "unable to retrieve files", http.StatusInternalServerError)
 		return
 	}
 
@@ -102,7 +104,8 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 
 	logs, err := h.db.GetLogs(r.Context(), filePath, before, 100)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[API] database query failed: %v", err)
+		http.Error(w, "database operation failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -135,6 +138,8 @@ func (h *Handler) GetNetworkMetrics(w http.ResponseWriter, r *http.Request) {
 	var startTime, endTime time.Time
 	var err error
 
+	startTime = time.Unix(0, 0).UTC()
+	endTime = time.Now().Add(time.Minute)
 	startStr := r.URL.Query().Get("start")
 	if startStr != "" {
 		startTime, err = time.Parse(time.RFC3339, startStr)
@@ -153,9 +158,13 @@ func (h *Handler) GetNetworkMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if endTime.Before(startTime) {
+		http.Error(w, "end must not precede start", http.StatusBadRequest)
+		return
+	}
 	protocols := r.URL.Query()["protocol"]
 
-	packets, err := h.db.GetNetworkPackets(r.Context(), startTime, endTime, protocols)
+	packets, err := h.db.GetNetworkPacketsWithStats(r.Context(), startTime, endTime, protocols)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
