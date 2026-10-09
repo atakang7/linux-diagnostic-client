@@ -185,7 +185,8 @@ func (h *Handler) GetNetworkMetrics(w http.ResponseWriter, r *http.Request) {
 
 	packets, err := h.db.GetNetworkPacketsWithStats(r.Context(), startTime, endTime, protocols)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("[API] network statistics query failed: %v", err)
+		http.Error(w, "database operation failed", http.StatusInternalServerError)
 		return
 	}
 
