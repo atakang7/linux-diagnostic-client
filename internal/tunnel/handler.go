@@ -374,7 +374,11 @@ func (h *Handler) FileUpdates() <-chan models.FileNode {
 func (h *Handler) Close() {
 	h.shutdownOnce.Do(func() {
 		close(h.shutdownCh)
-		_ = h.flushNetworkBatch(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.flushNetworkBatch(ctx); err != nil {
+			log.Printf("[TUNNEL] Final network flush failed: %v", err)
+		}
 
 		// Producers may still be finishing requests while listeners shut down.
 		// Leave event channels open; the WebSocket fan-out has its own stop signal.
