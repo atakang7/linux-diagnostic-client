@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -59,34 +61,44 @@ func NewServer(cfg *config.Config, db *db.DB) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	// Start tunnel server in background
+	// Bind both listeners before reporting startup as successful.
+	httpListener, err := net.Listen("tcp", s.cfg.ServerAddr)
+	if err != nil {
+		return fmt.Errorf("bind HTTP listener: %w", err)
+	}
+	defer httpListener.Close()
+
 	tunnelServer, err := tunnel.NewServer(s.cfg, s.tunnel)
 	if err != nil {
-		log.Printf("Tunnel server error: %v", err)
-		return err
+		return fmt.Errorf("bind agent listener: %w", err)
 	}
+	defer tunnelServer.Close()
+
+	errCh := make(chan error, 2)
 	go func() {
-		if err := tunnelServer.Run(ctx); err != nil {
-			log.Printf("Tunnel server error: %v", err)
+		if err := tunnelServer.Run(ctx); err != nil && ctx.Err() == nil {
+			errCh <- fmt.Errorf("agent listener: %w", err)
+		}
+	}()
+	go func() {
+		log.Printf("HTTP server listening on %s", httpListener.Addr())
+		if err := s.server.Serve(httpListener); err != nil && err != http.ErrServerClosed {
+			errCh <- fmt.Errorf("HTTP server: %w", err)
 		}
 	}()
 
-	// Start HTTP server
-	go func() {
-		log.Printf("HTTP server listening on %s", s.cfg.ServerAddr)
-		if err := s.server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
-		}
-	}()
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case runErr = <-errCh:
+	}
 
-	// Wait for shutdown signal
-	<-ctx.Done()
 	log.Println("Shutting down servers...")
-
-	// Create shutdown context with timeout
+	s.ws.Close()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// Graceful shutdown
-	return s.server.Shutdown(shutdownCtx)
+	if err := s.server.Shutdown(shutdownCtx); err != nil && runErr == nil {
+		runErr = err
+	}
+	return runErr
 }
