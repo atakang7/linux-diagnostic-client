@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -19,13 +20,18 @@ func NewHandler(db *db.DB) *Handler {
 	return &Handler{db: db}
 }
 
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("encode API response: %v", err)
+	}
+}
+
 func normalizePath(path string) string {
-	// Ensure path starts with /
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 
-	// Remove trailing slash unless it's the root path
 	if path != "/" && strings.HasSuffix(path, "/") {
 		path = path[:len(path)-1]
 	}
@@ -33,7 +39,6 @@ func normalizePath(path string) string {
 	return path
 }
 
-// internal/api/handler.go
 func (h *Handler) GetFiles(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
@@ -42,7 +47,6 @@ func (h *Handler) GetFiles(w http.ResponseWriter, r *http.Request) {
 		path = normalizePath(path)
 	}
 
-	// Get depth from query params, default to 1 if not specified
 	depth := 1
 	if depthStr := r.URL.Query().Get("depth"); depthStr != "" {
 		d, err := strconv.Atoi(depthStr)
@@ -53,14 +57,13 @@ func (h *Handler) GetFiles(w http.ResponseWriter, r *http.Request) {
 		depth = d
 	}
 
-	// Limit maximum depth to prevent excessive recursion
 	if depth > 10 {
 		depth = 10
 	}
 
-	log.Printf("[API] Getting file tree for path: %s with depth: %d", path, depth)
-
-	files, err := h.db.GetFileTree(r.Context(), path, depth)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	files, err := h.db.GetFileTree(ctx, path, depth)
 	if err != nil {
 		log.Printf("[API] Error getting file tree: %v", err)
 		http.Error(w, "unable to retrieve files", http.StatusInternalServerError)
@@ -68,20 +71,10 @@ func (h *Handler) GetFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(files) == 0 {
-		// Return empty array instead of null
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("[]"))
+		writeJSON(w, []any{})
 		return
 	}
-
-	log.Printf("[API] Found %d files at path: %s", len(files), path)
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(files); err != nil {
-		log.Printf("[API] Error encoding response: %v", err)
-		http.Error(w, "Error encoding response", http.StatusInternalServerError)
-		return
-	}
+	writeJSON(w, files)
 }
 
 func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
@@ -102,14 +95,16 @@ func (h *Handler) GetLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logs, err := h.db.GetLogs(r.Context(), filePath, before, 100)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	logs, err := h.db.GetLogs(ctx, filePath, before, 100)
 	if err != nil {
 		log.Printf("[API] database query failed: %v", err)
 		http.Error(w, "database operation failed", http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(logs)
+	writeJSON(w, logs)
 }
 
 func (h *Handler) SearchLogs(w http.ResponseWriter, r *http.Request) {
@@ -143,14 +138,16 @@ func (h *Handler) SearchLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logs, err := h.db.SearchLogs(r.Context(), req.Query, req.Files, req.StartTime, req.EndTime)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	logs, err := h.db.SearchLogs(ctx, req.Query, req.Files, req.StartTime, req.EndTime)
 	if err != nil {
 		log.Printf("[API] log search failed: %v", err)
 		http.Error(w, "database operation failed", http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(logs)
+	writeJSON(w, logs)
 }
 
 func (h *Handler) GetNetworkMetrics(w http.ResponseWriter, r *http.Request) {
@@ -183,12 +180,14 @@ func (h *Handler) GetNetworkMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	protocols := r.URL.Query()["protocol"]
 
-	packets, err := h.db.GetNetworkPacketsWithStats(r.Context(), startTime, endTime, protocols)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	packets, err := h.db.GetNetworkPacketsWithStats(ctx, startTime, endTime, protocols)
 	if err != nil {
 		log.Printf("[API] network statistics query failed: %v", err)
 		http.Error(w, "database operation failed", http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(packets)
+	writeJSON(w, packets)
 }
