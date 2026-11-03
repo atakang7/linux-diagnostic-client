@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -15,16 +16,21 @@ type Config struct {
 	LogBufferSize     int
 	NetworkBufferSize int
 	BatchSize         int
+	StreamBatchSize   int // How many packets to send in one websocket message
+	ProcessingWorkers int
+	MaxBackoff        time.Duration
+	InitialBackoff    time.Duration
 }
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		DatabaseURL:       getEnv("DATABASE_URL", ""),
+		DatabaseURL:       getEnv("DATABASE_URL", "postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable"),
 		ServerAddr:        getEnv("SERVER_ADDR", "127.0.0.1:8080"),
 		AgentAddr:         getEnv("AGENT_ADDR", "127.0.0.1:8081"),
-		LogBufferSize:     10000,
-		NetworkBufferSize: 50000,
-		BatchSize:         10000,
+		LogBufferSize:     10000, // Larger buffer for logs
+		NetworkBufferSize: 50000, // Larger buffer for network packets
+		BatchSize:         10000, // Database batch size
+		StreamBatchSize:   100,   // WebSocket stream batch size
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return nil, fmt.Errorf("DATABASE_URL must not be empty")
