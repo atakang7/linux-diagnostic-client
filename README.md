@@ -1,78 +1,55 @@
-# Linux Diagnostic Client
+# linux-diagnostic-client
 
-Go service for receiving telemetry from the [Linux Diagnostic Agent](https://github.com/AtakanG7/linux-diagnostic-agent). It stores log and network data in PostgreSQL/TimescaleDB and exposes a REST API and live WebSocket stream.
-
-## Architecture
+Go server for collecting Linux Diagnostic Agent telemetry in TimescaleDB and exposing REST and WebSocket endpoints.
 
 ```text
-Linux Diagnostic Agent
-         | TCP :8081 (newline-delimited JSON)
-         v
-   Tunnel handler -----> PostgreSQL/TimescaleDB -----> REST :8080
-         |
-         +-------------> WebSocket fan-out :8080/ws
++-------------+  TCP JSON  +-----------------+  SQL   +-------------+
+| linux agent | ---------> | internal/tunnel | -----> | TimescaleDB |
++-------------+            +-----------------+        +-------------+
+                                  |                          |
+                                  v events                   v reads
+                           +--------------------+     +--------------+
+                           | internal/websocket |     | internal/api |
+                           +--------------------+     +--------------+
+                                  | WS                       | HTTP
+                                  v                          v
+                           +---------------+          +-------------+
+                           | ws subscriber |          | rest client |
+                           +---------------+          +-------------+
 ```
 
-## Run locally
+## Quick start
 
-Requires Go 1.21+, Docker, and the PostgreSQL CLI (`psql`).
+Requires Go 1.21, Docker, Make, and `psql`.
 
 ```sh
-make dev-db        # localhost-only TimescaleDB container
-make init-db       # create database and schema
-make build
-./bin/diagnostic-client
+make dev-db
+PGPASSWORD=postgres make init-db
+export DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable'
+make run
 ```
 
-The database container is optional when a TimescaleDB-enabled PostgreSQL instance is already available. `make test` runs race-enabled unit tests; CI also launches a real database and executes integration tests.
+## Layout
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | `postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable` | Database connection |
-| `SERVER_ADDR` | `127.0.0.1:8080` | HTTP and WebSocket listener |
-| `AGENT_ADDR` | `127.0.0.1:8081` | Agent TCP listener |
+| Path | What it is |
+| --- | --- |
+| [cmd/api](cmd/api/README.md) | Executable entry point |
+| [internal/api](internal/api/README.md) | HTTP handlers and listeners |
+| [internal/config](internal/config/README.md) | Environment configuration |
+| [internal/db](internal/db/README.md) | pgx queries and schema |
+| [internal/tunnel](internal/tunnel/README.md) | Agent TCP ingestion |
+| [internal/websocket](internal/websocket/README.md) | Live event fan-out |
+| [pkg/models](pkg/models/README.md) | Shared telemetry types |
+| [integration](integration/README.md) | End-to-end test |
+| [init-scripts](init-scripts/README.md) | Database bootstrap SQL |
 
-These defaults use demo credentials and bind locally. Do not expose the service to untrusted networks.
+## Docs
 
-## HTTP and WebSocket
+[Documentation index](docs/README.md), [local setup](docs/how-to/run-locally.md), [API reference](docs/reference/http-api.md), and [architecture](docs/explanation/architecture.md).
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET | `/healthz` | Process liveness |
-| GET | `/readyz` | Database readiness |
-| GET | `/api/files?path=/&depth=1` | Discovered files; depth 1–10 |
-| GET | `/api/logs?file=/var/log/app.log` | Up to 100 log entries; optional RFC3339 `before` |
-| POST | `/api/logs/search` | Full-text search with JSON `query`, optional `files`, `start_time`, `end_time` |
-| GET | `/api/network/metrics` | Aggregated statistics and latest 1,000 matching packets; optional `start`, `end`, `protocol` |
-| GET | `/ws` | Live network, file, and selected log events |
+## Limits
 
-```sh
-curl -sS http://127.0.0.1:8080/api/files
-curl -sS -H 'Content-Type: application/json' -d '{"query":"connection refused"}' \
-  http://127.0.0.1:8080/api/logs/search
-```
-
-WebSocket messages have `type` and `payload`. Event types are `network`, `file_update`, and `log`. To receive events for a particular log file, send:
-
-```json
-{"type":"view_file","payload":"/var/log/app.log"}
-```
-
-Validation errors return HTTP 400; unexpected database failures return HTTP 500 without exposing internal details.
-
-## Verification
-
-```sh
-make build
-make vet
-make test
-```
-
-The CI integration job creates a real TimescaleDB instance, compiles and launches the client, and verifies TCP ingestion, database persistence, REST reads and two simultaneous WebSocket subscribers.
-
-## Operational boundaries
-
-- This project has **no built-in authentication or TLS** for REST, WebSocket, or agent TCP. Keep it on loopback or inside an appropriately protected network.
-- WebSocket subscribers have bounded queues; slow consumers can miss updates.
-- File inventory is global, not partitioned by agent identity. Avoid running independent overlapping agents.
-- Plain PostgreSQL is insufficient: the schema uses TimescaleDB.
+- HTTP, WebSocket, and agent TCP have no built-in authentication or TLS.
+- Slow WebSocket subscribers may lose live events.
+- File inventory is shared across agents and is identified by path.
+- Database initialization requires TimescaleDB.
