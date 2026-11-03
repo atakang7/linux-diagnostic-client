@@ -40,8 +40,8 @@ type Handler struct {
 	fileUpdateCh    chan models.FileNode
 	fileCache       *FileCache
 
-	batchMutex    sync.Mutex
-	networkBatch  []models.NetworkPacket
+	batchMutex   sync.Mutex
+	networkBatch []models.NetworkPacket
 
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
@@ -235,7 +235,6 @@ func (h *Handler) notifyFileChanges(changes *fileChanges) {
 		select {
 		case h.fileUpdateCh <- file:
 		default:
-			// Skip notification if channel is full
 		}
 	}
 }
@@ -274,7 +273,6 @@ func (h *Handler) handleLogData(ctx context.Context, payload json.RawMessage) er
 		select {
 		case h.logStreamCh <- entry:
 		default:
-			// Skip if channel is full
 		}
 	}
 

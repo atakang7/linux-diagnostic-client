@@ -22,9 +22,9 @@ func Load() (*Config, error) {
 		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		ServerAddr:        getEnv("SERVER_ADDR", "127.0.0.1:8080"),
 		AgentAddr:         getEnv("AGENT_ADDR", "127.0.0.1:8081"),
-		LogBufferSize:     10000, // Larger buffer for logs
-		NetworkBufferSize: 50000, // Larger buffer for network packets
-		BatchSize:         10000, // Database batch size
+		LogBufferSize:     10000,
+		NetworkBufferSize: 50000,
+		BatchSize:         10000,
 	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return nil, fmt.Errorf("DATABASE_URL must not be empty")

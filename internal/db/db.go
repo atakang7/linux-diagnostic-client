@@ -18,7 +18,6 @@ func New(ctx context.Context, url string) (*DB, error) {
 		return nil, fmt.Errorf("unable to parse database URL: %w", err)
 	}
 
-	// Optimize connection pool settings
 	config.MaxConns = 20
 	config.MinConns = 5
 	config.MaxConnLifetime = time.Hour

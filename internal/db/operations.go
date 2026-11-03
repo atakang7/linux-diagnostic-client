@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// GetAllFiles retrieves all files from the database
 func (db *DB) GetAllFiles(ctx context.Context) ([]models.FileNode, error) {
 	query := `
 		SELECT 
@@ -46,13 +45,11 @@ func (db *DB) GetAllFiles(ctx context.Context) ([]models.FileNode, error) {
 	return files, nil
 }
 
-// SaveFiles performs an efficient bulk insert/update of files
 func (db *DB) SaveFiles(ctx context.Context, files []models.FileNode) error {
 	if len(files) == 0 {
 		return nil
 	}
 
-	// Build bulk upsert query
 	valueStrings := make([]string, 0, len(files))
 	valueArgs := make([]interface{}, 0, len(files)*8)
 
@@ -93,7 +90,6 @@ func (db *DB) SaveFiles(ctx context.Context, files []models.FileNode) error {
 	return nil
 }
 
-// UpdateFiles performs efficient batch updates
 func (db *DB) UpdateFiles(ctx context.Context, files []models.FileNode) error {
 	if len(files) == 0 {
 		return nil
@@ -131,7 +127,6 @@ func (db *DB) UpdateFiles(ctx context.Context, files []models.FileNode) error {
 	return nil
 }
 
-// DeleteFiles performs an efficient bulk delete
 func (db *DB) DeleteFiles(ctx context.Context, paths []string) error {
 	if len(paths) == 0 {
 		return nil
@@ -158,7 +153,6 @@ func (db *DB) DeleteFiles(ctx context.Context, paths []string) error {
 	return nil
 }
 
-// SaveLogs efficiently saves log entries in bulk
 func (db *DB) SaveLogs(ctx context.Context, logs []models.LogEntry) error {
 	if len(logs) == 0 {
 		return nil
@@ -191,7 +185,6 @@ func (db *DB) SaveLogs(ctx context.Context, logs []models.LogEntry) error {
 	return nil
 }
 
-// SaveNetworkPackets saves network packets in efficient batches
 func (db *DB) SaveNetworkPackets(ctx context.Context, packets []models.NetworkPacket) error {
 	if len(packets) == 0 {
 		return nil
@@ -238,7 +231,6 @@ func (db *DB) SaveNetworkPackets(ctx context.Context, packets []models.NetworkPa
 	return nil
 }
 
-// GetLogs retrieves log entries with pagination
 func (db *DB) GetLogs(ctx context.Context, filePath string, beforeTime time.Time, limit int) ([]models.LogEntry, error) {
 	rows, err := db.pool.Query(ctx, `
 		SELECT file_path, line, line_number, timestamp, level
@@ -269,7 +261,6 @@ func (db *DB) GetLogs(ctx context.Context, filePath string, beforeTime time.Time
 	return logs, nil
 }
 
-// SearchLogs performs full-text search on log entries
 func (db *DB) SearchLogs(ctx context.Context, query string, files []string, startTime, endTime time.Time) ([]models.LogEntry, error) {
 	rows, err := db.pool.Query(ctx, `
 		SELECT file_path, line, line_number, timestamp, level
@@ -454,7 +445,6 @@ func (db *DB) GetNetworkPackets(ctx context.Context, startTime, endTime time.Tim
 	return packets, nil
 }
 
-// GetNetworkPacketsWithStats retrieves network packets with aggregated statistics
 func (db *DB) GetNetworkPacketsWithStats(ctx context.Context, startTime, endTime time.Time, protocols []string) (*models.NetworkStats, error) {
 	const statsQuery = `
 		WITH filtered_packets AS (
@@ -504,7 +494,6 @@ func (db *DB) GetNetworkPacketsWithStats(ctx context.Context, startTime, endTime
 	return &stats, nil
 }
 
-// GetTopNetworkStats retrieves top network statistics
 func (db *DB) GetTopNetworkStats(ctx context.Context, startTime, endTime time.Time, limit int) (*models.TopNetworkStats, error) {
 	query := `
 		WITH time_range AS (
