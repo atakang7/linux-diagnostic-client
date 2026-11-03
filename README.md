@@ -41,6 +41,19 @@ The process reads environment variables; `.env.example` contains loopback-only d
 | `SERVER_ADDR` | `127.0.0.1:8080` | HTTP and WebSocket listener |
 | `AGENT_ADDR` | `127.0.0.1:8081` | Agent TCP listener |
 
+## CI
+
+```text
++----------------+ triggers +------------+ passes +-----------------+
+| PR / main push | -------> | verify     | -----> | integration     |
++----------------+          +------------+        +-----------------+
+                                                        | starts
+                                                        v
+                                                  +-------------+
+                                                  | TimescaleDB |
+                                                  +-------------+
+```
+
 ## Limits
 
 - No built-in authentication or TLS; restrict network access.
