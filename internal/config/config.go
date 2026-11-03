@@ -19,7 +19,7 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		DatabaseURL:       getEnv("DATABASE_URL", "postgres://postgres:postgres@127.0.0.1:5432/diagnostic?sslmode=disable"),
+		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		ServerAddr:        getEnv("SERVER_ADDR", "127.0.0.1:8080"),
 		AgentAddr:         getEnv("AGENT_ADDR", "127.0.0.1:8081"),
 		LogBufferSize:     10000, // Larger buffer for logs
