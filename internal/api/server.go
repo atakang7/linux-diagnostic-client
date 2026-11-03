@@ -19,20 +19,16 @@ type Server struct {
 	db     *db.DB
 	tunnel *tunnel.Handler
 	ws     *websocket.Handler
-	http   *Handler
 	server *http.Server
 }
 
 func NewServer(cfg *config.Config, db *db.DB) *Server {
-	// Initialize components
 	tunnelHandler := tunnel.NewHandler(cfg, db)
-	wsHandler := websocket.NewHandler(cfg, tunnelHandler)
+	wsHandler := websocket.NewHandler(tunnelHandler)
 	httpHandler := NewHandler(db)
 
-	// Create server with routing
 	mux := http.NewServeMux()
 
-	// WebSocket endpoint
 	mux.HandleFunc("/ws", wsHandler.ServeWS)
 
 	// Liveness and database readiness use separate probes.
@@ -50,13 +46,11 @@ func NewServer(cfg *config.Config, db *db.DB) *Server {
 		_, _ = w.Write([]byte("ready\n"))
 	})
 
-	// REST endpoints
 	mux.HandleFunc("/api/files", httpHandler.GetFiles)
 	mux.HandleFunc("/api/logs", httpHandler.GetLogs)
 	mux.HandleFunc("/api/logs/search", httpHandler.SearchLogs)
 	mux.HandleFunc("/api/network/metrics", httpHandler.GetNetworkMetrics)
 
-	// Create HTTP server with timeouts
 	server := &http.Server{
 		Addr:         cfg.ServerAddr,
 		Handler:      mux,
@@ -70,7 +64,6 @@ func NewServer(cfg *config.Config, db *db.DB) *Server {
 		db:     db,
 		tunnel: tunnelHandler,
 		ws:     wsHandler,
-		http:   httpHandler,
 		server: server,
 	}
 }

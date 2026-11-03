@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"diagnostic-client/internal/config"
 	"diagnostic-client/internal/tunnel"
 
 	"github.com/gorilla/websocket"
@@ -31,7 +30,6 @@ type wsMessage struct {
 
 // Handler consumes each upstream stream once and fans out events to connected viewers.
 type Handler struct {
-	cfg     *config.Config
 	tunnel  *tunnel.Handler
 	mu      sync.RWMutex
 	viewers map[*websocket.Conn]string
@@ -40,9 +38,8 @@ type Handler struct {
 	once    sync.Once
 }
 
-func NewHandler(cfg *config.Config, stream *tunnel.Handler) *Handler {
+func NewHandler(stream *tunnel.Handler) *Handler {
 	h := &Handler{
-		cfg:     cfg,
 		tunnel:  stream,
 		viewers: make(map[*websocket.Conn]string),
 		clients: make(map[*websocket.Conn]chan wsMessage),
