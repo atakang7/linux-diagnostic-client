@@ -27,10 +27,8 @@ type Message struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
-// FileCache maintains an in-memory cache of the current file state
 type FileCache struct {
 	files map[string]models.FileNode
-	count int
 	mutex sync.RWMutex
 }
 
@@ -42,12 +40,9 @@ type Handler struct {
 	fileUpdateCh    chan models.FileNode
 	fileCache       *FileCache
 
-	// Network packet batching
-	batchMutex    sync.Mutex
-	networkBatch  []models.NetworkPacket
-	lastBatchTime time.Time
+	batchMutex   sync.Mutex
+	networkBatch []models.NetworkPacket
 
-	// Shutdown coordination
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 }
@@ -60,7 +55,6 @@ func NewHandler(cfg *config.Config, db *db.DB) *Handler {
 		logStreamCh:     make(chan models.LogEntry, cfg.LogBufferSize),
 		fileUpdateCh:    make(chan models.FileNode, 2000),
 		networkBatch:    make([]models.NetworkPacket, 0, cfg.BatchSize),
-		lastBatchTime:   time.Now(),
 		shutdownCh:      make(chan struct{}),
 		fileCache: &FileCache{
 			files: make(map[string]models.FileNode),
@@ -114,7 +108,6 @@ func (h *Handler) processMessage(ctx context.Context, msg Message) error {
 	}
 }
 
-// initializeFileCache loads the initial file state from the database
 func (h *Handler) initializeFileCache() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -131,12 +124,10 @@ func (h *Handler) initializeFileCache() {
 	for _, file := range files {
 		h.fileCache.files[file.Path] = file
 	}
-	h.fileCache.count = len(files)
 
 	log.Printf("[TUNNEL] Initialized file cache with %d files", len(files))
 }
 
-// handleFileList processes incoming file lists efficiently
 func (h *Handler) handleFileList(ctx context.Context, payload json.RawMessage) error {
 	var newFiles []models.FileNode
 	if err := json.Unmarshal(payload, &newFiles); err != nil {
@@ -173,13 +164,11 @@ func (h *Handler) detectFileChanges(newFiles []models.FileNode) *fileChanges {
 		deleted: make([]string, 0),
 	}
 
-	// Create map of new files
 	newFileMap := make(map[string]models.FileNode, len(newFiles))
 	for _, file := range newFiles {
 		newFileMap[file.Path] = file
 	}
 
-	// Find updates and deletions
 	h.fileCache.mutex.RLock()
 	for path, existingFile := range h.fileCache.files {
 		if newFile, exists := newFileMap[path]; exists {
@@ -193,7 +182,6 @@ func (h *Handler) detectFileChanges(newFiles []models.FileNode) *fileChanges {
 	}
 	h.fileCache.mutex.RUnlock()
 
-	// Remaining files are new
 	for _, file := range newFileMap {
 		changes.added = append(changes.added, file)
 	}
@@ -220,7 +208,6 @@ func (h *Handler) applyFileChanges(ctx context.Context, changes *fileChanges) er
 		}
 	}
 
-	// Update cache
 	h.updateFileCache(changes)
 
 	log.Printf("[TUNNEL] File changes processed: +%d -%d ~%d",
@@ -233,31 +220,25 @@ func (h *Handler) updateFileCache(changes *fileChanges) {
 	h.fileCache.mutex.Lock()
 	defer h.fileCache.mutex.Unlock()
 
-	// Apply deletions
 	for _, path := range changes.deleted {
 		delete(h.fileCache.files, path)
 	}
 
-	// Apply additions and updates
 	for _, file := range append(changes.added, changes.updated...) {
 		h.fileCache.files[file.Path] = file
 	}
 
-	h.fileCache.count = len(h.fileCache.files)
 }
 
 func (h *Handler) notifyFileChanges(changes *fileChanges) {
-	// Notify about new and updated files
 	for _, file := range append(changes.added, changes.updated...) {
 		select {
 		case h.fileUpdateCh <- file:
 		default:
-			// Skip notification if channel is full
 		}
 	}
 }
 
-// handleMetrics processes network metrics
 func (h *Handler) handleMetrics(ctx context.Context, payload json.RawMessage) error {
 	var metrics struct {
 		Timestamp string                 `json:"timestamp"`
@@ -278,7 +259,6 @@ func (h *Handler) handleMetrics(ctx context.Context, payload json.RawMessage) er
 	return nil
 }
 
-// handleLogData processes log entries
 func (h *Handler) handleLogData(ctx context.Context, payload json.RawMessage) error {
 	var logs []models.LogEntry
 	if err := json.Unmarshal(payload, &logs); err != nil {
@@ -289,19 +269,16 @@ func (h *Handler) handleLogData(ctx context.Context, payload json.RawMessage) er
 		return fmt.Errorf("save logs: %w", err)
 	}
 
-	// Stream logs to subscribers
 	for _, entry := range logs {
 		select {
 		case h.logStreamCh <- entry:
 		default:
-			// Skip if channel is full
 		}
 	}
 
 	return nil
 }
 
-// periodicNetworkFlush ensures network batches are flushed periodically
 func (h *Handler) periodicNetworkFlush() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -311,7 +288,10 @@ func (h *Handler) periodicNetworkFlush() {
 		case <-h.shutdownCh:
 			return
 		case <-ticker.C:
-			if err := h.flushNetworkBatch(context.Background()); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := h.flushNetworkBatch(ctx)
+			cancel()
+			if err != nil {
 				log.Printf("[TUNNEL] Error flushing network batch: %v", err)
 			}
 		}
@@ -327,10 +307,8 @@ func (h *Handler) flushNetworkBatch(ctx context.Context) error {
 
 	batch := h.networkBatch
 	h.networkBatch = make([]models.NetworkPacket, 0, h.cfg.BatchSize)
-	h.lastBatchTime = time.Now()
 	h.batchMutex.Unlock()
 
-	// Save to database
 	if err := h.db.SaveNetworkPackets(ctx, batch); err != nil {
 		// Preserve undelivered data for the next flush attempt.
 		h.batchMutex.Lock()
@@ -339,7 +317,6 @@ func (h *Handler) flushNetworkBatch(ctx context.Context) error {
 		return fmt.Errorf("save network batch: %w", err)
 	}
 
-	// Stream to subscribers
 	select {
 	case h.networkStreamCh <- batch:
 	default:
@@ -349,7 +326,6 @@ func (h *Handler) flushNetworkBatch(ctx context.Context) error {
 	return nil
 }
 
-// Helper functions
 func isFileChanged(a, b models.FileNode) bool {
 	return a.ModTime != b.ModTime ||
 		a.Size != b.Size ||
@@ -357,7 +333,6 @@ func isFileChanged(a, b models.FileNode) bool {
 		a.IsGzipped != b.IsGzipped
 }
 
-// Channel accessors
 func (h *Handler) NetworkStream() <-chan []models.NetworkPacket {
 	return h.networkStreamCh
 }
@@ -370,7 +345,6 @@ func (h *Handler) FileUpdates() <-chan models.FileNode {
 	return h.fileUpdateCh
 }
 
-// Close handles graceful shutdown
 func (h *Handler) Close() {
 	h.shutdownOnce.Do(func() {
 		close(h.shutdownCh)
