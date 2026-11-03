@@ -25,12 +25,15 @@ func New(ctx context.Context, url string) (*DB, error) {
 	config.MaxConnIdleTime = 30 * time.Minute
 	config.HealthCheckPeriod = time.Minute
 
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.NewWithConfig(connectCtx, config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create connection pool: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
+	if err := pool.Ping(connectCtx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("unable to connect to database: %w", err)
 	}

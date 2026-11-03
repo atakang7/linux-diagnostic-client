@@ -311,7 +311,10 @@ func (h *Handler) periodicNetworkFlush() {
 		case <-h.shutdownCh:
 			return
 		case <-ticker.C:
-			if err := h.flushNetworkBatch(context.Background()); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := h.flushNetworkBatch(ctx)
+			cancel()
+			if err != nil {
 				log.Printf("[TUNNEL] Error flushing network batch: %v", err)
 			}
 		}
